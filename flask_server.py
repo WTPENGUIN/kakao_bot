@@ -1,7 +1,8 @@
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, session
 from datetime import datetime
 import json
 import pymysql
+import login_Module
 import getAir
 import getBus
 import getCorona
@@ -9,6 +10,7 @@ import getWeather
 import getCorona_Graph
  
 app = Flask(__name__)
+app.secret_key = 'RANDOM_STRING'
 
 # 메세지를 카카오톡에서 처리 할 수 있게 JSON으로 변환하는 함수
 def response_data_text(text):
@@ -28,15 +30,19 @@ def response_data_text(text):
 
     return jsonify(res)
 
-# server init start
-home_station = getBus.getStation("YOUR_HOME_X_CORDINATE", "YOUR_HOME_Y_CORDINATE")
-home_code = getBus.getCityCode(getBus.getGeo("YOUR_HOME_X_CORDINATE", "YOUR_HOME_Y_CORDINATE"))
-# server init end
+# No-Cache Header
+@app.after_request
+def set_response_headers(r):
+    r.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate'
+    r.headers['Pragma'] = 'no-cache'
+    r.headers['Expires'] = '0'
+    return r
 
 # Error Handler
 @app.errorhandler(404)
 def page_not_found(error):
     return render_template('404.html')
+
 @app.errorhandler(500)
 def internal_server_error(error):
     return render_template('500.html')
@@ -44,20 +50,62 @@ def internal_server_error(error):
 # 메인 페이지 출력
 @app.route("/")
 def main_page():
-    return render_template('/index.html')
+    if 'username' in session:
+        return render_template('/index.html')
+    else:
+        return render_template('/mainpage.html')
+
 @app.route("/index")
 def index_page():
-    return render_template('/index.html')
+    if 'username' in session:
+        return render_template('/index.html')
+    else:
+        return render_template('/login.html')
 
 # 코로나 차트 페이지 출력
 @app.route("/corona")
 def corona_page():
-    return render_template('/corona.html')
+    if 'username' in session:
+        return render_template('/corona.html')
+    else:
+        return render_template('/401.html')
 
-# 로그인 페이지 출력
-@app.route("/login")
+# 핀패드 로그인
+@app.route("/login_pinpad", methods=['GET', 'POST'])
+def login_pin_page():
+    if request.method == 'GET':
+        return render_template('/pinpad.html')
+    else:
+        input_pw = request.form['inputPW']
+        
+        isAuth = login_Module.isAuth('iothome', input_pw)
+        if (isAuth == 1):
+            session['username'] = 'iothome'
+            return render_template('/index.html')
+        else:
+            return render_template('/pinpad.html')
+
+# 로그인
+@app.route("/login", methods=['GET', 'POST'])
 def login_page():
-    return render_template('/login.html')
+    if request.method == 'GET':
+        return render_template('/login.html')
+    else:
+        input_id = request.form['inputID']
+        input_pw = request.form['inputPW']
+        
+        isAuth = login_Module.isAuth(input_id, input_pw)
+        if (isAuth == 1):
+            session['username'] = input_id
+            return render_template('/index.html')
+        else:
+            return render_template('/login.html')
+
+# 로그아웃
+@app.route("/logout")
+def logout():
+    session.pop('username', None)
+    return render_template('/mainpage.html')
  
 # 그래프 json 가져오기
 @app.route("/<TARGET>.json")
@@ -65,11 +113,13 @@ def data(TARGET):
     sensor_data = []
 
     if(TARGET == 'sound'):
-        connection = pymysql.connect("YOUR_DB_CONNECTION_INFO")
+        connection = pymysql.connect("YOUR_DB_CONNECTION")
     elif(TARGET == 'humi'):
-        connection = pymysql.connect("YOUR_DB_CONNECTION_INFO")
+        connection = pymysql.connect("YOUR_DB_CONNECTION")
     elif(TARGET == 'temp'):
-        connection = pymysql.connect("YOUR_DB_CONNECTION_INFO")
+        connection = pymysql.connect("YOUR_DB_CONNECTION")
+    elif(TARGET == 'light'):
+        connection = pymysql.connect("YOUR_DB_CONNECTION")
     elif(TARGET == 'corona'):
         return getCorona_Graph.getjson()
     else:
@@ -79,16 +129,16 @@ def data(TARGET):
 
     if(TARGET == 'sound'):
         cursor.execute("SELECT 1000*time, value from VALUE")
-
     elif(TARGET == 'humi'):
         cursor.execute("SELECT 1000*time, humi from VALUE")
-
     elif(TARGET == 'temp'):
         cursor.execute("SELECT 1000*time, temp from VALUE")
+    elif(TARGET == 'light'):
+        cursor.execute("SELECT 1000*time, value from VALUE")
 
     results = cursor.fetchall()
     for row in results:
-        time = datetime.fromtimestamp(row[0] / 1000.0).strftime('%Y-%m-%d-%H-%M-%S')
+        time = datetime.fromtimestamp(row[0] / 1000.0).strftime('%m-%d-%H-%M')
         sensor_data.append({'x': time, 'y': row[1]})
 
     connection.close()
@@ -140,4 +190,10 @@ def home_state():
     return response_data_text("구현중입니다.")
 
 if __name__ == '__main__':
+    
+    # server init start
+    home_station = getBus.getStation("YOUR_HOME_CORDINATE")
+    home_code = getBus.getCityCode(getBus.getGeo("YOUR_HOME_CORDINATE"))
+    # server init end
+
     app.run(host='0.0.0.0', port=5000, threaded = True)
